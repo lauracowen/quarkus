@@ -29,6 +29,9 @@ fixes, documentation, examples... But first, read this page (including the small
   * [Gitpod](#gitpod)
 - [Build](#build)
   * [Workflow tips](#workflow-tips)
+    + [Using mvnd](#using-mvnd)
+    + [Using aliases](#using-aliases)
+      - [Justfile](#justfile)
     + [Building all modules of an extension](#building-all-modules-of-an-extension)
     + [Building a single module of an extension](#building-a-single-module-of-an-extension)
     + [Building with relocations](#building-with-relocations)
@@ -46,7 +49,6 @@ fixes, documentation, examples... But first, read this page (including the small
 - [Release your own version](#release-your-own-version)
 - [Documentation](#documentation)
   * [Building the documentation](#building-the-documentation)
-  * [Referencing a new guide in the index](#referencing-a-new-guide-in-the-index)
 - [Usage](#usage)
     + [With Maven](#with-maven)
     + [With Gradle](#with-gradle)
@@ -56,10 +58,17 @@ fixes, documentation, examples... But first, read this page (including the small
   * [Descriptions](#descriptions)
   * [Update dependencies to extensions](#update-dependencies-to-extensions)
   * [Check security vulnerabilities](#check-security-vulnerabilities)
+  * [External Maven repositories](#external-maven-repositories)
+- [LLM Usage Policy](#llm-usage-policy)
+  * [Acceptable Use of LLMs](#acceptable-use-of-llms)
+  * [Unacceptable Use](#unacceptable-use)
+  * [Consequences](#consequences)
+  * [If in Doubt](#if-in-doubt)
 - [The small print](#the-small-print)
 - [Frequently Asked Questions](#frequently-asked-questions)
 
 <!-- tocstop -->
+
 <small><i><a href='https://github.com/jonschlinkert/markdown-toc'>Table of contents generated with markdown-toc</a></i></small>
 
 ## Legal
@@ -888,6 +897,54 @@ long as the extension artifact is still present in your local Maven repository.
 When adding a new extension or updating the dependencies of an existing one,
 it is recommended to run in the extension directory the [OWASP Dependency Check](https://jeremylong.github.io/DependencyCheck) with `mvn -Dowasp-check`
 so that known security vulnerabilities in the extension dependencies can be detected early.
+
+### External Maven repositories
+
+The Quarkus Platform build is using the `--ignore-transitive-repositories` option from Maven.
+It ignores remote repositories introduced by transitive dependencies.
+
+This option is used to make sure we know when one of our dependencies relies on a repository that is not Maven Central.
+
+When a dependency relies on an external repository that is not Maven Central, we have to be extra careful:
+
+- First discuss it with the Quarkus Core team as it is something we want to avoid
+- If everyone agrees it is something we should allow in this specific case:
+  - Add the repository to the Quarkus module requiring the external repository (for instance, a specific extension runtime module) - don't add it to the root `pom.xml`
+  - Make sure you declare Maven Central first in the added `<repositories>` element so that we only download dependencies that are not in Maven Central from the external repository - see existing examples in the code base
+  - Add a `.mvn/rrf/groupId-<REPOSITORY-ID>.txt` file containing the list of authorized ``groupIds`` for this repository (one per line) - see existing examples in the code base
+  - Make sure you can fully run the build with an empty Maven local repository using `./mvnw -Dquickly -Dmaven.repo.local=/tmp/my-temp-local-repository`
+
+## LLM Usage Policy
+
+At Quarkus, we welcome tools that help developers become more productive — including Large Language Models (LLMs) and Agents like ChatGPT, GitHub Copilot, and others.
+
+However, recent patterns of use have led to increased moderation burden, low-value contributions, and reduced community signal. To ensure a healthy and productive community, the following expectations apply:
+
+### Acceptable Use of LLMs
+
+- LLMs may be used to **assist your development** — e.g. drafting code, writing documentation, proposing fixes — as long as **you understand, validate**, and **take responsibility for the results.**
+- You should only submit contributions (PRs, comments, discussions, issues) that reflect your **own understanding** and **intent**, not what an Agent/LLM "spit out."
+- You may use Agents/LLMs to help you **write better**, but not to **post more**.
+
+### Unacceptable Use
+
+- Submitting code, tests, comments, or issues that appear to be **copied directly from an LLM with little or no human oversight** is **not acceptable**.
+- Posting **large volumes of low-effort suggestions, vague issues, or links with no context** — even if technically accurate — is considered spam.
+- Submitting **AI-generated tests that do not validate actual behavior** or meaningfully cover functionality is not helpful and will be rejected.
+- Using bots, agents, or automated tools to open PRs, file issues, or post content **without human authorship and responsibility** is not allowed.
+
+### Consequences
+
+- We may close issues, PRs, or discussions that violate this policy without detailed explanation.
+- Repeated violations may result in temporary or permanent restrictions from participating in the project.
+
+### If in Doubt
+
+If you're unsure whether your use of Agent/LLMs is acceptable — ask! We're happy to help contributors learn how to use AI tools effectively **without creating noise**.
+
+> This isn’t about banning AI — it’s about keeping Quarkus collaborative, human-driven, and focused on quality.
+
+
 
 ## The small print
 

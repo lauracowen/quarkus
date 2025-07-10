@@ -1,5 +1,6 @@
 package io.quarkus.redis.runtime.datasource;
 
+import static io.quarkus.redis.runtime.datasource.DurationUtil.durationToSeconds;
 import static io.quarkus.redis.runtime.datasource.Validation.notNullOrEmpty;
 import static io.smallrye.mutiny.helpers.ParameterValidation.doesNotContainNull;
 import static io.smallrye.mutiny.helpers.ParameterValidation.nonNull;
@@ -43,7 +44,7 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
                 .put(marshaller.encode(destination))
                 .put(positionInSource.name())
                 .put(positionInDest.name())
-                .put(timeout.toSeconds()));
+                .put(durationToSeconds(timeout)));
 
     }
 
@@ -57,7 +58,7 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
         doesNotContainNull(keys, "keys");
         validate(timeout, "timeout");
         RedisCommand cmd = RedisCommand.of(Command.BLMPOP);
-        cmd.put(timeout.toSeconds());
+        cmd.put(durationToSeconds(timeout));
         cmd.put(keys.length);
         cmd.putAll(marshaller.encode(keys));
         cmd.put(position.name());
@@ -95,7 +96,7 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
         positive(count, "count");
 
         RedisCommand cmd = RedisCommand.of(Command.BLMPOP);
-        cmd.put(timeout.toSeconds());
+        cmd.put(durationToSeconds(timeout));
         cmd.put(keys.length);
         cmd.putAll(marshaller.encode(keys));
         cmd.put(position.name());
@@ -127,9 +128,8 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
         validate(timeout, "timeout");
 
         RedisCommand cmd = RedisCommand.of(Command.BLPOP);
-        cmd.put(timeout.toSeconds());
         cmd.putAll(marshaller.encode(keys));
-        cmd.put(timeout.toSeconds());
+        cmd.put(durationToSeconds(timeout));
 
         return execute(cmd);
     }
@@ -140,9 +140,8 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
         validate(timeout, "timeout");
 
         RedisCommand cmd = RedisCommand.of(Command.BRPOP);
-        cmd.put(timeout.toSeconds());
         cmd.putAll(marshaller.encode(keys));
-        cmd.put(timeout.toSeconds());
+        cmd.put(durationToSeconds(timeout));
 
         return execute(cmd);
     }
@@ -153,7 +152,7 @@ class AbstractListCommands<K, V> extends ReactiveSortable<K, V> {
         nonNull(destination, "destination");
 
         return execute(RedisCommand.of(Command.BRPOPLPUSH).put(marshaller.encode(source))
-                .put(marshaller.encode(destination)).put(timeout.toSeconds()));
+                .put(marshaller.encode(destination)).put(durationToSeconds(timeout)));
     }
 
     Uni<Response> _lindex(K key, long index) {

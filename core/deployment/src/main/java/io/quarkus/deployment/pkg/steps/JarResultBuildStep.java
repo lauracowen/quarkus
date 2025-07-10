@@ -154,7 +154,7 @@ public class JarResultBuildStep {
     public static final String DEFAULT_FAST_JAR_DIRECTORY_NAME = "quarkus-app";
 
     public static final String MP_CONFIG_FILE = "META-INF/microprofile-config.properties";
-    private static final String VINEFLOWER_VERSION = "1.10.1";
+    private static final String VINEFLOWER_VERSION = "1.11.1";
 
     @BuildStep
     OutputTargetBuildItem outputTarget(BuildSystemTargetBuildItem bst, PackageConfig packageConfig) {
@@ -920,7 +920,7 @@ public class JarResultBuildStep {
             return;
         }
         for (Path resolvedDep : appDep.getResolvedPaths()) {
-            final String fileName = appDep.getGroupId() + "." + resolvedDep.getFileName();
+            final String fileName = getJarFileName(appDep, resolvedDep);
             final Path targetPath;
 
             if (allowParentFirst && parentFirstArtifacts.contains(appDep.getKey())) {
@@ -970,6 +970,29 @@ public class JarResultBuildStep {
                 manifestConfig.addComponent(appComponent);
             }
         }
+    }
+
+    /**
+     * Returns a JAR file name to be used for a content of a dependency, depending on whether the resolved path
+     * is a directory or not.
+     * We don't use getFileName() for directories, since directories would often be "classes" ending up merging
+     * content from multiple dependencies in the same package
+     *
+     * @param dep dependency
+     * @param resolvedPath path of the resolved dependency
+     * @return JAR file name
+     */
+    public static String getJarFileName(ResolvedDependency dep, Path resolvedPath) {
+        boolean isDirectory = Files.isDirectory(resolvedPath);
+        if (!isDirectory) {
+            return dep.getGroupId() + "." + resolvedPath.getFileName();
+        }
+        final StringBuilder sb = new StringBuilder();
+        sb.append(dep.getGroupId()).append(".").append(dep.getArtifactId()).append("-");
+        if (!dep.getClassifier().isEmpty()) {
+            sb.append(dep.getClassifier()).append("-");
+        }
+        return sb.append(dep.getVersion()).append(".").append(dep.getType()).toString();
     }
 
     private void packageClasses(Path resolvedDep, final Path targetPath, PackageConfig packageConfig) throws IOException {

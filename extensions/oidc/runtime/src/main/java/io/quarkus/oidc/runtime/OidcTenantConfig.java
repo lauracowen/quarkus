@@ -142,6 +142,35 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
     Roles roles();
 
     /**
+     * Configuration to provide protected resource metadata.
+     */
+    @ConfigDocSection
+    ResourceMetadata resourceMetadata();
+
+    /**
+     * Protected resource metadata.
+     */
+    interface ResourceMetadata {
+        /**
+         * If the resource metadata can be provided.
+         */
+        @WithDefault("false")
+        boolean enabled();
+
+        /**
+         * Protected resource identifier.
+         */
+        Optional<String> resource();
+
+        /**
+         * Force a protected resource identifier HTTPS scheme.
+         * This property is ignored if {@link #resource() is an absolute URL}
+         */
+        @WithDefault("true")
+        boolean forceHttpsScheme();
+    }
+
+    /**
      * Configuration to customize validation of token claims.
      */
     @ConfigDocSection
@@ -339,6 +368,25 @@ public interface OidcTenantConfig extends OidcClientCommonConfig {
          * Clear-Site-Data header directives
          */
         Optional<Set<ClearSiteData>> clearSiteData();
+
+        enum LogoutMode {
+            /**
+             * Logout parameters are encoded in the query string
+             */
+            QUERY,
+
+            /**
+             * Logout parameters are encoded as HTML form values that are auto-submitted in the browser
+             * and transmitted by the HTTP POST method using the application/x-www-form-urlencoded content type
+             */
+            FORM_POST
+        }
+
+        /**
+         * Logout mode
+         */
+        @WithDefault("query")
+        LogoutMode logoutMode();
     }
 
     interface Backchannel {

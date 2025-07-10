@@ -2,9 +2,11 @@ package io.quarkus.devui.deployment.extension;
 
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 import io.quarkus.devui.spi.page.Card;
+import io.quarkus.devui.spi.page.LibraryLink;
 import io.quarkus.devui.spi.page.Page;
 
 public class Extension {
@@ -27,6 +29,10 @@ public class Extension {
     private final List<Page> menuPages = new ArrayList<>();
     private final List<Page> footerPages = new ArrayList<>();
     private Card card = null; // Custom card
+    private List<LibraryLink> libraryLinks = null;
+    private String darkLogo = null;
+    private String lightLogo = null;
+    private String headlessComponent = null;
 
     public Extension() {
 
@@ -58,6 +64,33 @@ public class Extension {
 
     public String getShortName() {
         return shortName;
+    }
+
+    public boolean hasLibraryLinks() {
+        return libraryLinks != null && !libraryLinks.isEmpty();
+    }
+
+    public List<LibraryLink> getLibraryLinks() {
+        return libraryLinks;
+    }
+
+    public void addLibraryLink(LibraryLink libraryLink) {
+        if (this.libraryLinks == null)
+            this.libraryLinks = new LinkedList<>();
+        this.libraryLinks.add(libraryLink);
+    }
+
+    public String getDarkLogo() {
+        return this.darkLogo;
+    }
+
+    public String getLightLogo() {
+        return this.lightLogo;
+    }
+
+    public void setLogo(String darkLogo, String lightLogo) {
+        this.darkLogo = darkLogo;
+        this.lightLogo = lightLogo;
     }
 
     public void setShortName(String shortName) {
@@ -200,6 +233,21 @@ public class Extension {
         return this.card != null;
     }
 
+    public void setHeadlessComponent(String headlessComponent) {
+        this.headlessComponent = headlessComponent;
+    }
+
+    public String getHeadlessComponent() {
+        return this.headlessComponent;
+    }
+
+    public String getHeadlessComponentRef() {
+        if (headlessComponent != null) {
+            return DOT + SLASH + DOT + DOT + SLASH + this.namespace + SLASH + this.headlessComponent;
+        }
+        return null;
+    }
+
     @Override
     public String toString() {
         return "Extension{" + "namespace=" + namespace + ", artifact=" + artifact + ", name=" + name + ", shortName="
@@ -208,4 +256,7 @@ public class Extension {
                 + ", builtWith=" + builtWith + ", providesCapabilities=" + providesCapabilities + ", extensionDependencies="
                 + extensionDependencies + ", codestart=" + codestart + '}';
     }
+
+    private static final String SLASH = "/";
+    private static final String DOT = ".";
 }

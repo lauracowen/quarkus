@@ -56,6 +56,7 @@ public class DevUIRecorder {
         if (recordedValues != null && !recordedValues.isEmpty()) {
             jsonRpcRouter.setRecordedValues(recordedValues);
         }
+
         jsonRpcRouter.initializeCodec(createJsonMapper());
     }
 
@@ -133,6 +134,10 @@ public class DevUIRecorder {
 
     public Handler<RoutingContext> createLocalHostOnlyFilter(List<String> hosts) {
         return new LocalHostOnlyFilter(hosts);
+    }
+
+    public Handler<RoutingContext> createDevUICorsFilter(List<String> hosts) {
+        return new DevUICORSFilter(hosts);
     }
 
     private static final class DeleteDirectoryRunnable implements Runnable {

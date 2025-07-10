@@ -1,5 +1,6 @@
 package io.quarkus.deployment.steps;
 
+import static io.quarkus.deployment.annotations.ExecutionTime.RUNTIME_INIT;
 import static io.quarkus.deployment.configuration.ConfigMappingUtils.processConfigMapping;
 import static io.quarkus.deployment.configuration.ConfigMappingUtils.processExtensionConfigMapping;
 import static io.quarkus.deployment.configuration.RunTimeConfigurationGenerator.CONFIG_RUNTIME_NAME;
@@ -99,8 +100,10 @@ import io.quarkus.runtime.configuration.RuntimeConfigBuilder;
 import io.quarkus.runtime.configuration.RuntimeOverrideConfigSource;
 import io.quarkus.runtime.configuration.RuntimeOverrideConfigSourceBuilder;
 import io.quarkus.runtime.configuration.StaticInitConfigBuilder;
+import io.smallrye.config.ConfigMappingInterface;
 import io.smallrye.config.ConfigMappingLoader;
 import io.smallrye.config.ConfigMappingMetadata;
+import io.smallrye.config.ConfigMappings;
 import io.smallrye.config.ConfigMappings.ConfigClass;
 import io.smallrye.config.ConfigSourceFactory;
 import io.smallrye.config.ConfigSourceInterceptor;
@@ -303,6 +306,7 @@ public class ConfigGenerationBuildStep {
                 staticSafeServices(secretKeyHandlerFactories),
                 Set.of(),
                 staticMappings,
+                configItem.getReadResult().getMappingsIgnorePaths(),
                 staticCustomizers,
                 staticInitConfigBuilders.stream().map(StaticInitConfigBuilderBuildItem::getBuilderClassName).collect(toSet()));
         reflectiveClass.produce(ReflectiveClassBuildItem.builder(CONFIG_STATIC_NAME).build());
@@ -330,6 +334,7 @@ public class ConfigGenerationBuildStep {
                 secretKeyHandlerFactories,
                 staticMappings,
                 runTimeMappings,
+                configItem.getReadResult().getMappingsIgnorePaths(),
                 runtimeCustomizers,
                 runTimeConfigBuilders.stream().map(RunTimeConfigBuilderBuildItem::getBuilderClassName).collect(toSet()));
         reflectiveClass.produce(ReflectiveClassBuildItem.builder(CONFIG_RUNTIME_NAME).build());
@@ -486,19 +491,48 @@ public class ConfigGenerationBuildStep {
     }
 
     @BuildStep
+    @Record(RUNTIME_INIT)
+    void reportDeprecatedMappingProperties(ConfigRecorder configRecorder, ConfigurationBuildItem configBuildItem) {
+        // Build Time
+        List<ConfigClass> visibleBuildTimeMappings = new ArrayList<>();
+        visibleBuildTimeMappings.addAll(configBuildItem.getReadResult().getBuildTimeMappings());
+        visibleBuildTimeMappings.addAll(configBuildItem.getReadResult().getBuildTimeRunTimeMappings());
+        Map<String, String> deprecatedProperties = deprecatedProperties(visibleBuildTimeMappings);
+        ConfigDiagnostic.deprecatedProperties(deprecatedProperties);
+
+        // Runtime
+        Map<String, String> runtimeDeprecatedProperties = deprecatedProperties(
+                configBuildItem.getReadResult().getRunTimeMappings());
+        configRecorder.deprecatedProperties(runtimeDeprecatedProperties);
+    }
+
+    private static Map<String, String> deprecatedProperties(List<ConfigClass> configClasses) {
+        Map<String, String> deprecatedProperties = new HashMap<>();
+        for (ConfigClass buildTimeMapping : configClasses) {
+            Map<String, ConfigMappingInterface.Property> properties = ConfigMappings.getProperties(buildTimeMapping);
+            for (Map.Entry<String, ConfigMappingInterface.Property> entry : properties.entrySet()) {
+                Deprecated deprecated = entry.getValue().getMethod().getAnnotation(Deprecated.class);
+                if (deprecated != null) {
+                    // TODO - add javadoc message
+                    deprecatedProperties.put(entry.getKey(), null);
+                }
+            }
+        }
+        return deprecatedProperties;
+    }
+
+    @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     void unknownConfigFiles(
             ApplicationArchivesBuildItem applicationArchives,
             LaunchModeBuildItem launchModeBuildItem,
             ConfigRecorder configRecorder) throws Exception {
 
+        Set<Path> buildTimeFiles = new HashSet<>();
         PathCollection rootDirectories = applicationArchives.getRootArchive().getRootDirectories();
-        if (!rootDirectories.isSinglePath()) {
-            return;
+        for (Path directory : rootDirectories) {
+            buildTimeFiles.addAll(ConfigDiagnostic.configFiles(directory));
         }
-
-        Set<String> buildTimeFiles = new HashSet<>();
-        buildTimeFiles.addAll(ConfigDiagnostic.configFiles(rootDirectories.getSinglePath()));
         buildTimeFiles.addAll(ConfigDiagnostic.configFilesFromLocations());
 
         // Report always at build time since config folder and locations may differ from build to runtime
@@ -595,6 +629,9 @@ public class ConfigGenerationBuildStep {
     private static final MethodDescriptor WITH_MAPPING_INSTANCE = MethodDescriptor.ofMethod(AbstractConfigBuilder.class,
             "withMappingInstance",
             void.class, SmallRyeConfigBuilder.class, ConfigClass.class);
+    private static final MethodDescriptor WITH_MAPPING_IGNORE = MethodDescriptor.ofMethod(AbstractConfigBuilder.class,
+            "withMappingIgnore",
+            void.class, SmallRyeConfigBuilder.class, String.class);
     private static final MethodDescriptor WITH_CUSTOMIZER = MethodDescriptor.ofMethod(AbstractConfigBuilder.class,
             "withCustomizer",
             void.class, SmallRyeConfigBuilder.class, SmallRyeConfigBuilderCustomizer.class);
@@ -643,6 +680,7 @@ public class ConfigGenerationBuildStep {
                 clinit.writeStaticField(mappingField, clinit.invokeStaticMethod(CONFIG_CLASS,
                         clinit.load(mapping.getType().getName()), clinit.load(mapping.getPrefix())));
 
+                // Cache implementation types of nested elements
                 List<ConfigMappingMetadata> configMappingsMetadata = ConfigMappingLoader
                         .getConfigMappingsMetadata(mapping.getType());
                 for (ConfigMappingMetadata configMappingMetadata : configMappingsMetadata) {
@@ -675,6 +713,7 @@ public class ConfigGenerationBuildStep {
             Set<String> secretKeyHandlerFactories,
             Set<ConfigClass> mappingsInstances,
             Set<ConfigClass> mappings,
+            Set<String> mappingsIgnorePaths,
             Set<String> configCustomizers,
             Set<String> configBuilders) {
 
@@ -759,6 +798,10 @@ public class ConfigGenerationBuildStep {
             mappings.removeAll(mappingsInstances);
             for (ConfigClass mapping : mappings) {
                 method.invokeStaticMethod(WITH_MAPPING, configBuilder, method.readStaticField(sharedFields.get(mapping)));
+            }
+
+            for (String path : mappingsIgnorePaths) {
+                method.invokeStaticMethod(WITH_MAPPING_IGNORE, configBuilder, method.load(path));
             }
 
             clinit.returnVoid();

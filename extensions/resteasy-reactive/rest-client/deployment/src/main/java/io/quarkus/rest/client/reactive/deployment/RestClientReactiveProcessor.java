@@ -369,7 +369,7 @@ class RestClientReactiveProcessor {
             // Make sure all providers not annotated with @Provider but used in @RegisterProvider are registered as beans
             AnnotationValue value = annotationInstance.value();
             if (value != null) {
-                builder.addBeanClass(value.asClass().toString());
+                builder.addBeanClass(value.asClass().name().toString());
             }
         }
         return builder.build();
@@ -594,6 +594,11 @@ class RestClientReactiveProcessor {
                     //     return InterfaceClass.super.get();
                     // }
                     MethodCreator methodCreator = classCreator.getMethodCreator(MethodDescriptor.of(method));
+                    for (Type exception : method.exceptions()) {
+                        // declared exceptions are important in case the client is intercepted, because interception
+                        // subclasses wrap undeclared checked exceptions into `ArcUndeclaredThrowableException`
+                        methodCreator.addException(exception.name().toString());
+                    }
                     methodCreator.setSignature(method.genericSignatureIfRequired());
 
                     // copy method annotations, there can be interceptors bound to them:

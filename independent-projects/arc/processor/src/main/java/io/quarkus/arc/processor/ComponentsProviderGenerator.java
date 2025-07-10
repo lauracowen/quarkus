@@ -42,6 +42,7 @@ import io.quarkus.gizmo.MethodCreator;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.gizmo.ResultHandle;
 import io.quarkus.gizmo.TryBlock;
+import io.smallrye.common.annotation.SuppressForbidden;
 
 /**
  *
@@ -551,6 +552,7 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         void addComponentInternal(BeanInfo removedBean) {
 
             ResultHandle removedBeansHandle = addMethod.getMethodParam(0);
@@ -654,11 +656,13 @@ public class ComponentsProviderGenerator extends AbstractGenerator {
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         public ResultHandle get(org.jboss.jandex.Type type, BytecodeCreator bytecode) {
             return bytecode.invokeInterfaceMethod(MethodDescriptors.MAP_GET, mapHandle, bytecode.load(type.toString()));
         }
 
         @Override
+        @SuppressForbidden(reason = "Using Type.toString() to build an informative message")
         public void put(org.jboss.jandex.Type type, ResultHandle value, BytecodeCreator bytecode) {
             bytecode.invokeInterfaceMethod(MethodDescriptors.MAP_PUT, mapHandle, bytecode.load(type.toString()), value);
         }

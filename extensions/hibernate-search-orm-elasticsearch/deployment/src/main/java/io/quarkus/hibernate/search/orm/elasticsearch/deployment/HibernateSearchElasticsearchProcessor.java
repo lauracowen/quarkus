@@ -37,8 +37,6 @@ import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.deployment.builditem.DevServicesAdditionalConfigBuildItem;
-import io.quarkus.deployment.builditem.HotDeploymentWatchedFileBuildItem;
-import io.quarkus.deployment.builditem.nativeimage.NativeImageResourceBuildItem;
 import io.quarkus.deployment.recording.RecorderContext;
 import io.quarkus.deployment.util.JandexUtil;
 import io.quarkus.elasticsearch.restclient.common.deployment.DevservicesElasticsearchBuildItem;
@@ -54,7 +52,6 @@ import io.quarkus.hibernate.search.backend.elasticsearch.common.runtime.Elastics
 import io.quarkus.hibernate.search.orm.elasticsearch.runtime.HibernateSearchElasticsearchBuildTimeConfig;
 import io.quarkus.hibernate.search.orm.elasticsearch.runtime.HibernateSearchElasticsearchBuildTimeConfigPersistenceUnit;
 import io.quarkus.hibernate.search.orm.elasticsearch.runtime.HibernateSearchElasticsearchRecorder;
-import io.quarkus.hibernate.search.orm.elasticsearch.runtime.HibernateSearchElasticsearchRuntimeConfig;
 import io.quarkus.hibernate.search.orm.elasticsearch.runtime.HibernateSearchOrmElasticsearchMapperContext;
 import io.quarkus.runtime.configuration.ConfigUtils;
 import io.quarkus.vertx.http.deployment.spi.RouteBuildItem;
@@ -74,9 +71,7 @@ class HibernateSearchElasticsearchProcessor {
             List<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptorBuildItems,
             BuildProducer<HibernateSearchElasticsearchPersistenceUnitConfiguredBuildItem> configuredPersistenceUnits,
             BuildProducer<HibernateOrmIntegrationStaticConfiguredBuildItem> staticIntegrations,
-            BuildProducer<HibernateOrmIntegrationRuntimeConfiguredBuildItem> runtimeIntegrations,
-            BuildProducer<NativeImageResourceBuildItem> nativeImageResources,
-            BuildProducer<HotDeploymentWatchedFileBuildItem> hotDeploymentWatchedFiles) {
+            BuildProducer<HibernateOrmIntegrationRuntimeConfiguredBuildItem> runtimeIntegrations) {
         IndexView index = combinedIndexBuildItem.getIndex();
         Collection<AnnotationInstance> indexedAnnotations = index.getAnnotations(INDEXED);
 
@@ -182,7 +177,6 @@ class HibernateSearchElasticsearchProcessor {
             CombinedIndexBuildItem combinedIndexBuildItem,
             List<HibernateSearchIntegrationStaticConfiguredBuildItem> integrationStaticConfigBuildItems,
             List<HibernateSearchElasticsearchPersistenceUnitConfiguredBuildItem> configuredPersistenceUnits,
-            HibernateSearchElasticsearchBuildTimeConfig buildTimeConfig,
             BuildProducer<HibernateOrmIntegrationStaticConfiguredBuildItem> staticConfigured) {
         // Make it possible to record the settings as bytecode:
         recorderContext.registerSubstitution(ElasticsearchVersion.class,
@@ -212,7 +206,6 @@ class HibernateSearchElasticsearchProcessor {
                                     // we cannot pass a config group to a recorder so passing the whole config
                                     recorder.createStaticInitListener(
                                             configuredPersistenceUnit.mapperContext,
-                                            buildTimeConfig,
                                             rootAnnotationMappedClassNames,
                                             integrationStaticInitListeners))
                             .setXmlMappingRequired(xmlMappingRequired));
@@ -247,7 +240,6 @@ class HibernateSearchElasticsearchProcessor {
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
     void setRuntimeConfig(HibernateSearchElasticsearchRecorder recorder,
-            HibernateSearchElasticsearchRuntimeConfig runtimeConfig,
             List<HibernateSearchIntegrationRuntimeConfiguredBuildItem> integrationRuntimeConfigBuildItems,
             List<HibernateSearchElasticsearchPersistenceUnitConfiguredBuildItem> configuredPersistenceUnits,
             BuildProducer<HibernateOrmIntegrationRuntimeConfiguredBuildItem> runtimeConfigured) {
@@ -264,9 +256,8 @@ class HibernateSearchElasticsearchProcessor {
             }
             runtimeConfigured.produce(
                     new HibernateOrmIntegrationRuntimeConfiguredBuildItem(HIBERNATE_SEARCH_ELASTICSEARCH, puName)
-                            .setInitListener(
-                                    recorder.createRuntimeInitListener(configuredPersistenceUnit.mapperContext,
-                                            runtimeConfig, integrationRuntimeInitListeners)));
+                            .setInitListener(recorder.createRuntimeInitListener(configuredPersistenceUnit.mapperContext,
+                                    integrationRuntimeInitListeners)));
         }
     }
 

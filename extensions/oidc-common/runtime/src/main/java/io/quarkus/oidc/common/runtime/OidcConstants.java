@@ -86,6 +86,9 @@ public final class OidcConstants {
 
     public static final String CLIENT_METADATA_CLIENT_NAME = "client_name";
     public static final String CLIENT_METADATA_REDIRECT_URIS = "redirect_uris";
+    public static final String CLIENT_METADATA_GRANT_TYPES = "grant_types";
+    public static final String CLIENT_METADATA_JWKS = "jwks";
+    public static final String CLIENT_METADATA_TOKEN_ENDPOINT_AUTH_METHOD = "token_endpoint_auth_method";
     public static final String CLIENT_METADATA_POST_LOGOUT_URIS = "post_logout_redirect_uris";
     public static final String CLIENT_METADATA_SECRET_EXPIRES_AT = "client_secret_expires_at";
     public static final String CLIENT_METADATA_ID_ISSUED_AT = "client_id_issued_at";
@@ -102,4 +105,8 @@ public final class OidcConstants {
     public static final String ACR = "acr";
     public static final String ACR_VALUES = "acr_values";
     public static final String MAX_AGE = "max_age";
+
+    public static final String RESOURCE_METADATA_WELL_KNOWN_PATH = "/.well-known/oauth-protected-resource";
+    public static final String RESOURCE_METADATA_RESOURCE = "resource";
+    public static final String RESOURCE_METADATA_AUTHORIZATION_SERVERS = "authorization_servers";
 }

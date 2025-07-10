@@ -43,6 +43,13 @@ public interface DevUIConfig {
     Optional<List<String>> hosts();
 
     /**
+     * Set a context root for dev-ui. This is useful for remote environments or online IDEs
+     *
+     * @return The dev-ui context root
+     */
+    Optional<String> contextRoot();
+
+    /**
      * Workspace configuration.
      */
     Workspace workspace();
@@ -51,6 +58,12 @@ public interface DevUIConfig {
      * CORS configuration.
      */
     Cors cors();
+
+    /**
+     * Enable/Disable the ability to add and remove extensions from Dev UI
+     */
+    @WithDefault("true")
+    boolean allowExtensionManagement();
 
     /**
      * Fine tune the theme

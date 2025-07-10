@@ -10,6 +10,7 @@ import java.util.Set;
 import javax.sql.DataSource;
 
 import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.PersistenceConfiguration;
 import jakarta.persistence.PersistenceException;
 import jakarta.persistence.spi.PersistenceProvider;
 import jakarta.persistence.spi.PersistenceUnitInfo;
@@ -35,6 +36,7 @@ import io.quarkus.hibernate.orm.runtime.boot.registry.PreconfiguredServiceRegist
 import io.quarkus.hibernate.orm.runtime.config.DatabaseOrmCompatibilityVersion;
 import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationRuntimeDescriptor;
 import io.quarkus.hibernate.orm.runtime.integration.HibernateOrmIntegrationRuntimeInitListener;
+import io.quarkus.hibernate.orm.runtime.migration.MultiTenancyStrategy;
 import io.quarkus.hibernate.orm.runtime.recording.PrevalidatedQuarkusMetadata;
 import io.quarkus.hibernate.orm.runtime.recording.RecordedState;
 
@@ -79,6 +81,14 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
         log.tracef("Starting createContainerEntityManagerFactory : %s", info.getPersistenceUnitName());
 
         return getEntityManagerFactoryBuilder(info, properties).build();
+    }
+
+    @Override
+    public EntityManagerFactory createEntityManagerFactory(PersistenceConfiguration configuration) {
+        throw new PersistenceException(
+                "This PersistenceProvider does not support createEntityManagerFactory(PersistenceConfiguration). "
+                        + " Quarkus is responsible for creating the entity manager factory, so inject your entity manager"
+                        + " factory through CDI instead: `@Inject EntityManagerFactory emf`.");
     }
 
     @SuppressWarnings("rawtypes")
@@ -196,7 +206,8 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
                     standardServiceRegistry /* Mostly ignored! (yet needs to match) */,
                     runtimeSettings,
                     validatorFactory, cdiBeanManager, recordedState.getMultiTenancyStrategy(),
-                    true);
+                    true,
+                    recordedState.getBuildTimeSettings().getSource().getBuiltinFormatMapperBehaviour());
         }
 
         log.debug("Found no matching persistence units");
@@ -212,7 +223,8 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
         Optional<String> dataSourceName = recordedState.getBuildTimeSettings().getSource().getDataSource();
         if (dataSourceName.isPresent()) {
             // Inject the datasource
-            injectDataSource(persistenceUnitName, dataSourceName.get(), runtimeSettingsBuilder);
+            injectDataSource(persistenceUnitName, dataSourceName.get(), recordedState.getMultiTenancyStrategy(),
+                    runtimeSettingsBuilder);
         }
 
         // Inject runtime configuration if the persistence unit was defined by Quarkus configuration
@@ -229,7 +241,12 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
         }
 
         // Allow detection of driver/database capabilities on runtime init (was disabled during static init)
-        runtimeSettingsBuilder.put("hibernate.boot.allow_jdbc_metadata_access", "true");
+        runtimeSettingsBuilder.put(AvailableSettings.ALLOW_METADATA_ON_BOOT, "true");
+        // Remove database version information, if any;
+        // it was necessary during static init to force creation of a dialect,
+        // but now the dialect is there, and we'll reuse it.
+        // Keeping this information would prevent us from getting the actual information from the database on start.
+        runtimeSettingsBuilder.put(AvailableSettings.JAKARTA_HBM2DDL_DB_VERSION, null);
 
         if (!persistenceUnitConfig.unsupportedProperties().isEmpty()) {
             log.warnf("Persistence-unit [%s] sets unsupported properties."
@@ -382,8 +399,10 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
     }
 
     private static void injectDataSource(String persistenceUnitName, String dataSourceName,
+            MultiTenancyStrategy multiTenancyStrategy,
             RuntimeSettings.Builder runtimeSettingsBuilder) {
-        // first convert
+        // Note: the counterpart of this code, but for multitenancy (injecting the connection provider),
+        // can be found in io.quarkus.hibernate.orm.runtime.boot.FastBootMetadataBuilder.mergeSettings
 
         if (runtimeSettingsBuilder.isConfigured(AvailableSettings.URL) ||
                 runtimeSettingsBuilder.isConfigured(AvailableSettings.DATASOURCE) ||
@@ -392,6 +411,16 @@ public final class FastBootHibernatePersistenceProvider implements PersistencePr
                 runtimeSettingsBuilder.isConfigured(AvailableSettings.JAKARTA_JTA_DATASOURCE) ||
                 runtimeSettingsBuilder.isConfigured(AvailableSettings.JAKARTA_NON_JTA_DATASOURCE)) {
             // the datasource has been defined in the persistence unit, we can bail out
+            return;
+        }
+
+        if (multiTenancyStrategy != null && multiTenancyStrategy != MultiTenancyStrategy.NONE
+                && multiTenancyStrategy != MultiTenancyStrategy.DISCRIMINATOR) {
+            // Nothing to do: the datasource retrieval will be handled dynamically
+            // by an implementation of TenantConnectionResolver -- for instance
+            // io.quarkus.hibernate.orm.runtime.tenant.DataSourceTenantConnectionResolver.
+            // In the case of database multi-tenancy, that connection resolver
+            // might not even use the assigned datasource.
             return;
         }
 

@@ -49,6 +49,8 @@ import io.mvnpm.importmap.Location;
 import io.mvnpm.importmap.model.Imports;
 import io.quarkus.bootstrap.model.ApplicationModel;
 import io.quarkus.builder.Version;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.IsLocalDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
@@ -96,9 +98,12 @@ public class BuildTimeContentProcessor {
      * This will be merged into the final importmap
      */
     @BuildStep(onlyIf = IsLocalDevelopment.class)
-    InternalImportMapBuildItem createKnownInternalImportMap(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
+    InternalImportMapBuildItem createKnownInternalImportMap(NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
+            DevUIConfig config) {
 
-        String contextRoot = nonApplicationRootPathBuildItem.getNonApplicationRootPath() + EndpointsProcessor.DEV_UI + SLASH;
+        String devUIContext = config.contextRoot().orElse("");
+        String contextRoot = devUIContext + nonApplicationRootPathBuildItem.getNonApplicationRootPath()
+                + EndpointsProcessor.DEV_UI + SLASH;
 
         InternalImportMapBuildItem internalImportMapBuildItem = new InternalImportMapBuildItem();
 
@@ -113,6 +118,9 @@ public class BuildTimeContentProcessor {
         internalImportMapBuildItem.add("qwc-extension-link", contextRoot + "qwc/qwc-extension-link.js");
         // Quarkus UI
         internalImportMapBuildItem.add("qui-ide-link", contextRoot + "qui/qui-ide-link.js");
+        internalImportMapBuildItem.add("qui-themed-code-block", contextRoot + "qui/qui-themed-code-block.js");
+        internalImportMapBuildItem.add("qui-assistant-warning", contextRoot + "qui/qui-assistant-warning.js");
+        internalImportMapBuildItem.add("qui-assistant-button", contextRoot + "qui/qui-assistant-button.js");
 
         // Echarts
         internalImportMapBuildItem.add("echarts/", contextRoot + "echarts/");
@@ -138,6 +146,7 @@ public class BuildTimeContentProcessor {
         internalImportMapBuildItem.add("state/", contextRoot + "state/");
         internalImportMapBuildItem.add("theme-state", contextRoot + "state/theme-state.js");
         internalImportMapBuildItem.add("connection-state", contextRoot + "state/connection-state.js");
+        internalImportMapBuildItem.add("assistant-state", contextRoot + "state/assistant-state.js");
         internalImportMapBuildItem.add("devui-state", contextRoot + "state/devui-state.js");
 
         return internalImportMapBuildItem;
@@ -207,7 +216,10 @@ public class BuildTimeContentProcessor {
     @BuildStep(onlyIf = IsLocalDevelopment.class)
     DeploymentMethodBuildItem mapDeploymentMethods(
             List<BuildTimeActionBuildItem> buildTimeActions,
-            CurateOutcomeBuildItem curateOutcomeBuildItem) {
+            CurateOutcomeBuildItem curateOutcomeBuildItem,
+            Capabilities capabilities) {
+
+        final boolean assistantIsAvailable = capabilities.isPresent(Capability.ASSISTANT);
 
         List<String> methodNames = new ArrayList<>();
         List<String> subscriptionNames = new ArrayList<>();
@@ -218,19 +230,27 @@ public class BuildTimeContentProcessor {
                 String fullName = extensionPathName + "." + bta.getMethodName();
                 if (bta.hasRuntimeValue()) {
                     recordedValues.put(fullName, bta.getRuntimeValue());
-                } else {
+                    methodNames.add(fullName);
+                } else if (bta.hasAction()) {
                     DevConsoleManager.register(fullName, bta.getAction());
+                    methodNames.add(fullName);
+                } else if (bta.hasAssistantAction() && assistantIsAvailable) {
+                    DevConsoleManager.register(fullName, bta.getAssistantAction());
+                    methodNames.add(fullName);
                 }
-                methodNames.add(fullName);
             }
             for (BuildTimeAction bts : actions.getSubscriptions()) {
                 String fullName = extensionPathName + "." + bts.getMethodName();
                 if (bts.hasRuntimeValue()) {
                     recordedValues.put(fullName, bts.getRuntimeValue());
-                } else {
+                    subscriptionNames.add(fullName);
+                } else if (bts.hasAction()) {
                     DevConsoleManager.register(fullName, bts.getAction());
+                    subscriptionNames.add(fullName);
+                } else if (bts.hasAssistantAction() && assistantIsAvailable) {
+                    DevConsoleManager.register(fullName, bts.getAssistantAction());
+                    subscriptionNames.add(fullName);
                 }
-                subscriptionNames.add(fullName);
             }
         }
 
@@ -275,13 +295,15 @@ public class BuildTimeContentProcessor {
      * @param internalImportMapProducer
      */
     @BuildStep(onlyIf = IsLocalDevelopment.class)
-    void createBuildTimeConstJsTemplate(CurateOutcomeBuildItem curateOutcomeBuildItem,
+    void createBuildTimeConstJsTemplate(DevUIConfig config,
+            CurateOutcomeBuildItem curateOutcomeBuildItem,
             NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
             List<BuildTimeConstBuildItem> buildTimeConstBuildItems,
             BuildProducer<QuteTemplateBuildItem> quteTemplateProducer,
             BuildProducer<InternalImportMapBuildItem> internalImportMapProducer) {
 
-        String contextRoot = nonApplicationRootPathBuildItem.getNonApplicationRootPath() + EndpointsProcessor.DEV_UI + SLASH;
+        String contextRoot = config.contextRoot().orElse("") + nonApplicationRootPathBuildItem.getNonApplicationRootPath()
+                + EndpointsProcessor.DEV_UI + SLASH;
 
         QuteTemplateBuildItem quteTemplateBuildItem = new QuteTemplateBuildItem(
                 QuteTemplateBuildItem.DEV_UI);
@@ -344,7 +366,7 @@ public class BuildTimeContentProcessor {
      * @return The QuteTemplate Build item that will create the end result
      */
     @BuildStep(onlyIf = IsLocalDevelopment.class)
-    QuteTemplateBuildItem createIndexHtmlTemplate(
+    QuteTemplateBuildItem createIndexHtmlTemplate(DevUIConfig config,
             MvnpmBuildItem mvnpmBuildItem,
             ThemeVarsBuildItem themeVarsBuildItem,
             NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem,
@@ -359,7 +381,10 @@ public class BuildTimeContentProcessor {
             aggregator.addMappings(importMap);
         }
 
-        Imports imports = aggregator.aggregate(nonApplicationRootPathBuildItem.getNonApplicationRootPath(), false);
+        String devUIContext = config.contextRoot().orElse("");
+
+        Imports imports = aggregator.aggregate(devUIContext + nonApplicationRootPathBuildItem.getNonApplicationRootPath(),
+                false);
         Map<String, String> currentImportMap = imports.getImports();
         Map<String, String> relocationMap = relocationImportMapBuildItem.getRelocationMap();
         for (Map.Entry<String, String> relocation : relocationMap.entrySet()) {
@@ -380,7 +405,7 @@ public class BuildTimeContentProcessor {
 
         String themeVars = themeVarsBuildItem.getTemplateValue();
         String nonApplicationRoot = nonApplicationRootPathBuildItem.getNonApplicationRootPath();
-        String contextRoot = nonApplicationRoot + EndpointsProcessor.DEV_UI + SLASH;
+        String contextRoot = devUIContext + nonApplicationRoot + EndpointsProcessor.DEV_UI + SLASH;
 
         Map<String, Object> data = Map.of(
                 "nonApplicationRoot", nonApplicationRoot,
@@ -450,7 +475,7 @@ public class BuildTimeContentProcessor {
         addThemeBuildTimeData(internalBuildTimeData, devUIConfig, themeVarsProducer);
         addMenuSectionBuildTimeData(internalBuildTimeData, internalPages, extensionsBuildItem);
         addFooterTabBuildTimeData(internalBuildTimeData, extensionsBuildItem, devUIConfig);
-        addVersionInfoBuildTimeData(internalBuildTimeData, curateOutcomeBuildItem, nonApplicationRootPathBuildItem);
+        addApplicationInfoBuildTimeData(internalBuildTimeData, curateOutcomeBuildItem, nonApplicationRootPathBuildItem);
         addIdeBuildTimeData(internalBuildTimeData, effectiveIdeBuildItem, launchModeBuildItem);
         buildTimeConstProducer.produce(internalBuildTimeData);
     }
@@ -558,7 +583,7 @@ public class BuildTimeContentProcessor {
         internalBuildTimeData.addBuildTimeData("loggerLevels", LEVELS);
     }
 
-    private void addVersionInfoBuildTimeData(BuildTimeConstBuildItem internalBuildTimeData,
+    private void addApplicationInfoBuildTimeData(BuildTimeConstBuildItem internalBuildTimeData,
             CurateOutcomeBuildItem curateOutcomeBuildItem,
             NonApplicationRootPathBuildItem nonApplicationRootPathBuildItem) {
 
@@ -571,9 +596,11 @@ public class BuildTimeContentProcessor {
         applicationInfo.put("groupId", groupId);
         String artifactId = appArtifact.getArtifactId();
         applicationInfo.put("artifactId", artifactId);
-        // Add version info
+
         String contextRoot = nonApplicationRootPathBuildItem.getNonApplicationRootPath() + EndpointsProcessor.DEV_UI + SLASH;
         applicationInfo.put("contextRoot", contextRoot);
+
+        // Add version info
         applicationInfo.put("quarkusVersion", Version.getVersion());
         applicationInfo.put("applicationName", config.getOptionalValue("quarkus.application.name", String.class).orElse(""));
         applicationInfo.put("applicationVersion",
@@ -710,6 +737,9 @@ public class BuildTimeContentProcessor {
 
         light.put("--quarkus-center", QUARKUS_DARK.toString());
         dark.put("--quarkus-center", QUARKUS_LIGHT.toString());
+
+        light.put("--quarkus-assistant", QUARKUS_ASSISTANT.toString());
+        dark.put("--quarkus-assistant", QUARKUS_ASSISTANT.toString());
     }
 
     /**
@@ -1171,6 +1201,7 @@ public class BuildTimeContentProcessor {
     private static final Color QUARKUS_RED = Color.from(4, 90, 58);
     private static final Color QUARKUS_DARK = Color.from(0, 0, 13);
     private static final Color QUARKUS_LIGHT = Color.from(0, 0, 100);
+    private static final Color QUARKUS_ASSISTANT = Color.from(320, 100, 71);
 
     private static String getThemeSettingOrDefault(Optional<DevUIConfig.Theme> theme,
             Function<DevUIConfig.Theme, Optional<DevUIConfig.ThemeMode>> themeModeExtractor,

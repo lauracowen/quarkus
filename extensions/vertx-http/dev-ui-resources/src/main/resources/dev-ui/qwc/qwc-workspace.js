@@ -5,11 +5,9 @@ import '@vaadin/button';
 import '@vaadin/split-layout';
 import '@vaadin/menu-bar';
 import '@vaadin/tooltip';
-import '@qomponent/qui-code-block';
+import 'qui-themed-code-block';
 import '@qomponent/qui-directory-tree';
 import '@qomponent/qui-badge';
-import '@vaadin/tabs';
-import '@vaadin/tabsheet';
 import '@vaadin/dialog';
 import '@vaadin/confirm-dialog';
 import '@vaadin/progress-bar';
@@ -17,10 +15,11 @@ import MarkdownIt from 'markdown-it';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import { dialogHeaderRenderer, dialogFooterRenderer, dialogRenderer } from '@vaadin/dialog/lit.js';
 import { observeState } from 'lit-element-state';
-import { themeState } from 'theme-state';
 import { notifier } from 'notifier';
 import './qwc-workspace-binary.js';
 import 'qui-ide-link';
+import 'qui-assistant-warning';
+import { assistantState } from 'assistant-state';
 
 /**
  * This component shows the workspace
@@ -43,6 +42,7 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
             display: flex;
             width: 100%;
             height: 100%;
+            flex-direction: column;
         }
     
         .split vaadin-split-layout {
@@ -67,12 +67,62 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
             display: flex;
             flex-direction: row-reverse;
             padding-right: 10px;
+            position: absolute;
+            right: 0px;
         }
     
         iframe {
             width: 100%;
             height: 100vh;
             border: none;
+        }
+    
+        .mainMenuBar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--lumo-contrast-20pct);
+        }
+    
+        .mainMenuBarButtons {
+            display: flex; 
+            align-items: center; 
+        }
+
+        .mainMenuBarTitle {
+            font-size: large;
+            color: var(--lumo-contrast-50pct);
+            user-select: none;
+            cursor: pointer;
+            width: 100%;
+            text-align: center;
+        }
+
+        .mainMenuBarActions {
+            display: flex; 
+            align-items: center; 
+            gap: 0.5rem;
+            justify-content: end;
+            padding-right: 10px;
+        }
+
+        .assistant {
+            position: absolute;
+            top: 0;
+            right: 0;
+            padding-top: 8px;
+            padding-right: 16px;
+            z-index:9;
+        }
+    
+        .actionResult {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+    
+        vaadin-progress-bar {
+            width: 20%;
         }
     `;
     
@@ -85,7 +135,8 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
         _changeToWorkspaceItem: {state: true},
         _actionResult: {state: true},
         _showActionProgress: {state: true},
-        _confirmDialogOpened: {state: true}
+        _confirmDialogOpened: {state: true},
+        _isMaximized: {state: true}
     };
 
     constructor() { 
@@ -98,6 +149,7 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
         this._clearSelectedWorkspaceItem();
         this._clearActionResult();
         this._confirmDialogOpened = false;
+        this._isMaximized = false;
     }
 
     connectedCallback() {
@@ -157,9 +209,10 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
     render() { 
         if (this._workspaceItems) {
             return html`<div class="split">
+                            ${this._renderMainMenuBar()}
                             <vaadin-split-layout>
-                                <master-content style="width: 25%;">${this._renderWorkspaceTree()}</master-content>
-                                <detail-content style="width: 75%;">${this._renderSelectedSource()}</detail-content>
+                                <master-content style="width: ${this._isMaximized ? '0%' : '25%'};">${this._renderWorkspaceTree()}</master-content>
+                                <detail-content style="width: ${this._isMaximized ? '100%' : '75%'};">${this._renderSelectedSource()}</detail-content>
                             </vaadin-split-layout>
                         </div>
                         ${this._renderResultDialog()}
@@ -182,37 +235,47 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
             
             return html`<vaadin-split-layout>
                             <master-content style="width: 50%;">
-                                <vaadin-tabsheet>
-
-                                    <vaadin-button title="Save" slot="prefix" theme="icon" aria-label="Save" @click="${this._saveSelectedWorkspaceItem}">
-                                      <vaadin-icon icon="font-awesome-solid:floppy-disk"></vaadin-icon>
-                                    </vaadin-button>
-                                    <vaadin-button title="Copy" slot="prefix" theme="icon" aria-label="Copy" @click="${this._copySelectedWorkspaceItem}">
-                                      <vaadin-icon icon="font-awesome-solid:copy"></vaadin-icon>
-                                    </vaadin-button>
-                                    
-            
-                                    ${this._renderActions()}
-
-                                    <qui-ide-link slot="suffix" title="Open in IDE" style="cursor: pointer;"
-                                        fileName="${this._selectedWorkspaceItem.path}"
-                                        lineNumber="0"
-                                        noCheck>
-                                        <vaadin-icon icon="font-awesome-solid:up-right-from-square"></vaadin-icon>      
-                                    </qui-ide-link>
-
-                                    <vaadin-tabs slot="tabs">
-                                      <vaadin-tab id="${this._selectedWorkspaceItem.path}" title="${this._selectedWorkspaceItem.path}">${this._selectedWorkspaceItem.name.split('/').pop()}</vaadin-tab>
-                                    </vaadin-tabs>
-
-                                    <div tab="${this._selectedWorkspaceItem.path}">
-                                        ${this._renderContent()}
-                                    </div>
-                                </vaadin-tabsheet>
+                                <div class="mainPart">
+                                    ${this._renderMainContent()}
+                                </div>
                             </master-content>
                             ${this._renderResultSplitView()}
-                        </vaadin-split-layout>`;
+                        </vaadin-split-layout>
+                    `;
         }
+    }
+    
+    _renderMainMenuBar(){
+        const isHidden = !this._selectedWorkspaceItem.name;
+        
+        return html`
+            <div class="mainMenuBar" style="${isHidden ? 'visibility: hidden;' : ''}">
+                <div class="mainMenuBarButtons">
+                    <vaadin-button title="Save" theme="icon tertiary" aria-label="Save" @click="${this._saveSelectedWorkspaceItem}">
+                        <vaadin-icon icon="font-awesome-solid:floppy-disk"></vaadin-icon>
+                    </vaadin-button>
+                    <vaadin-button title="Copy" theme="icon tertiary" aria-label="Copy" @click="${this._copySelectedWorkspaceItem}">
+                        <vaadin-icon icon="font-awesome-solid:copy"></vaadin-icon>
+                    </vaadin-button>
+                </div>
+
+                <div class="mainMenuBarTitle" @dblclick="${this._toggleSplit}">
+                    ${this._selectedWorkspaceItem?.name?.split('/').pop()}
+                </div>
+
+                <div class="mainMenuBarActions">
+                    ${this._renderActions()}
+                    <qui-ide-link title="Open in IDE"
+                        style="cursor: pointer;"
+                        fileName="${this._selectedWorkspaceItem?.path}"
+                        lineNumber="0"
+                        noCheck>
+                        <vaadin-icon icon="font-awesome-solid:up-right-from-square"></vaadin-icon>
+                    </qui-ide-link>
+                </div>
+            </div>
+        `;
+        
     }
     
     _renderResultSplitView(){
@@ -262,40 +325,51 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
     
     _renderActionResult(){
         if(this._actionResult && this._actionResult.content && this._actionResult.displayType === "raw"){
-            return html`${this._actionResult.content}`;
+            return html`<div class="actionResult">${this._actionResult.content}</div>${this._renderAssistantWarning()}`;
         }else if(this._actionResult && this._actionResult.content && this._actionResult.displayType === "code"){
             // TODO: We can not assume the mode is the same as the input
             // Maybe return name|content ?
-            return html`<qui-code-block id="code" class='codeBlock'
-                                    mode='${this._getMode(this._actionResult?.name ?? this._actionResult?.path)}' 
-                                    theme='${themeState.theme.name}'
-                                    .content='${this._actionResult.content}'
-                                    showLineNumbers>
-                                </qui-code-block>`;
+            return html`<div class="actionResult">
+                            ${this._renderAssistantWarning()}    
+                            <qui-themed-code-block id="code" class='codeBlock'
+                                mode='${this._getMode(this._actionResult?.name ?? this._actionResult?.path)}' 
+                                .content='${this._actionResult.content}'
+                                showLineNumbers>
+                            </qui-themed-code-block>
+                        </div>`;
         }else if(this._actionResult && this._actionResult.content && this._actionResult.displayType === "markdown"){
             const htmlContent = this.md.render(this._actionResult.content);
-            return html`${unsafeHTML(htmlContent)}`; 
+            return html`<div class="actionResult">
+                            ${this._renderAssistantWarning()}
+                            ${unsafeHTML(htmlContent)}
+                        </div>`; 
         }else if(this._actionResult && this._actionResult.content && this._actionResult.displayType === "html"){
-            return html`${unsafeHTML(this._actionResult.content)}`; 
+            return html`<div class="actionResult">
+                            ${this._renderAssistantWarning()}
+                            ${unsafeHTML(this._actionResult.content)}
+                        </div>`; 
         }else if(this._actionResult && this._actionResult.content && this._actionResult.displayType === "image"){
             let imgurl = `data:image/png;base64,${this._actionResult.content}`;
-            return html`<img src="${imgurl}" alt="${this._actionResult?.name ?? this._actionResult?.path}" style="max-width: 100%;"/>`;
+            return html`<div class="actionResult">
+                            ${this._renderAssistantWarning()}
+                            <img src="${imgurl}" alt="${this._actionResult?.name ?? this._actionResult?.path}" style="max-width: 100%;"/>
+                        </div>`;
         }
     }
     
     _renderActions(){
         if(this._filteredActions){
             if(this._showActionProgress){
-                return html`<vaadin-progress-bar slot="suffix" indeterminate></vaadin-progress-bar>`;
+                return html`<vaadin-progress-bar style="width:400px;" indeterminate></vaadin-progress-bar>`;
             }else{
-                return html`<div class="actions" slot="suffix">
-                            <vaadin-menu-bar .items="${this._filteredActions}" theme="dropdown-indicators" @item-selected="${(e) => this._actionSelected(e)}"></vaadin-menu-bar>
+                return html`<div class="actions">
+                            <vaadin-menu-bar .items="${this._filteredActions}" theme="dropdown-indicators tertiary" @item-selected="${(e) => this._actionSelected(e)}"></vaadin-menu-bar>
                         </div>`;
             }
         }
     }
     
-    _renderContent(){
+    _renderMainContent(){
         if(this._selectedWorkspaceItem.isBinary){
             return this._renderBinaryContent();
         }else{
@@ -320,14 +394,26 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
     }
     
     _renderTextContent(){
-        return html`<qui-code-block id="code" class='codeBlock' @keydown="${this._onKeyDown}"
+        return html`<qui-themed-code-block id="code" class='codeBlock' @keydown="${this._onKeyDown}"
                         mode='${this._getMode(this._selectedWorkspaceItem.name)}'
-                        theme='${themeState.theme.name}'
                         .content='${this._selectedWorkspaceItem.content}'
                         value='${this._selectedWorkspaceItem.content}'
                         showLineNumbers
                         editable>
-                    </qui-code-block>`;
+                    </qui-themed-code-block>
+                    ${this._renderAssistantWarningInline()}`;
+    }
+
+    _renderAssistantWarningInline(){
+        if(this._selectedWorkspaceItem.isAssistant){
+            return html`<qui-assistant-warning class="assistant"></qui-assistant-warning>`;
+        }
+    }
+
+    _renderAssistantWarning(){
+        if(this._actionResult.isAssistant){
+             return html`<qui-assistant-warning></qui-assistant-warning>`;
+        }   
     }
     
     _renderConfirmDialog(){
@@ -352,6 +438,10 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
         >
           There are unsaved changes. Do you want to discard or save them?
         </vaadin-confirm-dialog>`;
+    }
+    
+    _toggleSplit() {
+        this._isMaximized = !this._isMaximized;
     }
     
     _confirmOpenedChanged(e) {
@@ -389,6 +479,21 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
                                     content:newWorkspaceItemValue,
                                     type:this._selectedWorkspaceItem.type}).then(jsonRpcResponse => { 
             
+            if (!('content' in jsonRpcResponse.result.result) || !('name' in jsonRpcResponse.result.result)) {
+                const firstEntry = Object.entries(jsonRpcResponse.result.result).find(
+                    ([key]) => key !== 'path' && key !== 'name'
+                );
+                if (firstEntry) {
+                    const [key, value] = firstEntry;
+                    if (!('content' in jsonRpcResponse.result.result)) {
+                        jsonRpcResponse.result.result.content = value;
+                    }
+                    if (!('name' in jsonRpcResponse.result.result)) {
+                        jsonRpcResponse.result.result.name = key;
+                    }
+                }
+            }
+            
             if(e.detail.value.display === "notification"){
                 notifier.showInfoMessage(jsonRpcResponse.result.result);
             }else if(e.detail.value.display === "replace"){
@@ -396,11 +501,17 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
                 this._selectedWorkspaceItem.type = e.detail.value.displayType;
                 this._selectedWorkspaceItem.path = jsonRpcResponse.result.path;
                 this._selectedWorkspaceItem.isDirty = true;
+                this._selectedWorkspaceItem.isAssistant = jsonRpcResponse.result?.isAssistant ?? false;
             }else if(e.detail.value.display !== "nothing"){
                 this._actionResult = jsonRpcResponse.result.result;
-                this._actionResult.name = this._actionResult.path;
+                if(jsonRpcResponse.result.result.name){
+                    this._actionResult.name = jsonRpcResponse.result.result.name;
+                }else{
+                    this._actionResult.name = this._actionResult.path;
+                }
                 this._actionResult.path = jsonRpcResponse.result.path;
                 this._actionResult.display = e.detail.value.display;
+                this._actionResult.isAssistant = jsonRpcResponse.result?.isAssistant ?? false;
                 this._actionResult.displayType = e.detail.value.displayType;
             }
             this._showActionProgress = false;
@@ -586,7 +697,8 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
                                 id: item.id, 
                                 pattern: item.pattern,
                                 display: item.display,
-                                displayType: item.displayType
+                                displayType: item.displayType,
+                                isAssistanceAction: item.isAssistanceAction
                             }
                         )
                     )
@@ -601,7 +713,15 @@ export class QwcWorkspace extends observeState(QwcHotReloadElement) {
             const filteredChildren = actionGroup.children.filter(child => {
                 if(child.pattern){
                     const regex = new RegExp(child.pattern);
-                    return regex.test(name);
+                    if(regex.test(name)){
+                        if(child.isAssistanceAction){
+                            return assistantState.current.isConfigured;
+                        }
+                        return true;
+                    }
+                    return false;
+                }else if(child.isAssistanceAction){
+                    return assistantState.current.isConfigured;
                 }
                 return true;
             });

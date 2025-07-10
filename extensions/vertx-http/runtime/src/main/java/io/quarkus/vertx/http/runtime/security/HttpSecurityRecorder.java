@@ -12,7 +12,12 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.Set;
 import java.util.concurrent.CompletionException;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -45,6 +50,7 @@ import io.smallrye.mutiny.Uni;
 import io.smallrye.mutiny.subscription.UniSubscriber;
 import io.smallrye.mutiny.subscription.UniSubscription;
 import io.smallrye.mutiny.tuples.Functions;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Context;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
@@ -53,8 +59,13 @@ import io.vertx.ext.web.RoutingContext;
 
 @Recorder
 public class HttpSecurityRecorder {
-
     private static final Logger log = Logger.getLogger(HttpSecurityRecorder.class);
+
+    private final RuntimeValue<VertxHttpConfig> httpConfig;
+
+    public HttpSecurityRecorder(final RuntimeValue<VertxHttpConfig> httpConfig) {
+        this.httpConfig = httpConfig;
+    }
 
     public RuntimeValue<AuthenticationHandler> authenticationMechanismHandler(boolean proactiveAuthentication,
             boolean propagateRoutingContext) {
@@ -66,9 +77,9 @@ public class HttpSecurityRecorder {
     }
 
     public void initializeHttpAuthenticatorHandler(RuntimeValue<AuthenticationHandler> handlerRuntimeValue,
-            VertxHttpConfig httpConfig, BeanContainer beanContainer) {
+            BeanContainer beanContainer) {
         handlerRuntimeValue.getValue().init(beanContainer.beanInstance(PathMatchingHttpSecurityPolicy.class),
-                RolesMapping.of(httpConfig.auth().rolesMapping()));
+                HttpSecurityConfiguration.get(httpConfig.getValue()).rolesMapping());
     }
 
     public Handler<RoutingContext> permissionCheckHandler() {
@@ -163,6 +174,11 @@ public class HttpSecurityRecorder {
         };
     }
 
+    public void prepareHttpSecurityConfiguration() {
+        // this is done so that we prepare and validate HTTP Security config before the first incoming request
+        HttpSecurityConfiguration.get(httpConfig.getValue());
+    }
+
     public static abstract class DefaultAuthFailureHandler implements BiConsumer<RoutingContext, Throwable> {
 
         /**
@@ -207,10 +223,25 @@ public class HttpSecurityRecorder {
                 proceed(throwable);
             } else if (throwable instanceof AuthenticationRedirectException redirectEx) {
                 event.response().setStatusCode(redirectEx.getCode());
-                event.response().headers().set(HttpHeaders.LOCATION, redirectEx.getRedirectUri());
                 event.response().headers().set(HttpHeaders.CACHE_CONTROL, "no-store");
                 event.response().headers().set("Pragma", "no-cache");
-                proceed(throwable);
+
+                if (redirectEx.getCode() == 200) {
+                    // The target URL is embedded in the auto-submitted form post payload
+                    log.debugf("Form post redirect to %s", redirectEx.getRedirectUri());
+                    event.response().putHeader("Content-Type", "text/html; charset=UTF-8");
+                    event.response().write(redirectEx.getRedirectUri()).onComplete(
+                            new Handler<AsyncResult<Void>>() {
+                                @Override
+                                public void handle(AsyncResult<Void> v) {
+                                    proceed(redirectEx);
+                                }
+                            });
+                } else {
+                    log.debugf("Redirect to %s ", redirectEx.getRedirectUri());
+                    event.response().headers().set(HttpHeaders.LOCATION, redirectEx.getRedirectUri());
+                    proceed(throwable);
+                }
             } else {
                 event.put(OTHER_AUTHENTICATION_FAILURE, Boolean.TRUE);
                 event.fail(throwable);
@@ -435,11 +466,11 @@ public class HttpSecurityRecorder {
         }
     }
 
-    public void setMtlsCertificateRoleProperties(VertxHttpConfig httpConfig) {
+    public void setMtlsCertificateRoleProperties() {
         InstanceHandle<MtlsAuthenticationMechanism> mtls = Arc.container().instance(MtlsAuthenticationMechanism.class);
 
-        if (mtls.isAvailable() && httpConfig.auth().certificateRoleProperties().isPresent()) {
-            Path rolesPath = httpConfig.auth().certificateRoleProperties().get();
+        if (mtls.isAvailable() && httpConfig.getValue().auth().certificateRoleProperties().isPresent()) {
+            Path rolesPath = httpConfig.getValue().auth().certificateRoleProperties().get();
             URL rolesResource = null;
             if (Files.exists(rolesPath)) {
                 try {
@@ -468,7 +499,8 @@ public class HttpSecurityRecorder {
                 }
 
                 if (!roles.isEmpty()) {
-                    var certRolesAttribute = new CertificateRoleAttribute(httpConfig.auth().certificateRoleAttribute(), roles);
+                    var certRolesAttribute = new CertificateRoleAttribute(
+                            httpConfig.getValue().auth().certificateRoleAttribute(), roles);
                     mtls.get().setCertificateToRolesMapper(certRolesAttribute.rolesMapper());
                 }
             } catch (Exception e) {
@@ -530,14 +562,12 @@ public class HttpSecurityRecorder {
         return Set.copyOf(roles);
     }
 
-    public Supplier<BasicAuthenticationMechanism> basicAuthenticationMechanismBean(VertxHttpConfig httpConfig,
-            boolean formAuthEnabled) {
+    public Supplier<BasicAuthenticationMechanism> basicAuthenticationMechanismBean(boolean formAuthEnabled) {
         return new Supplier<>() {
             @Override
             public BasicAuthenticationMechanism get() {
-                return new BasicAuthenticationMechanism(httpConfig.auth().realm().orElse(null), formAuthEnabled);
+                return new BasicAuthenticationMechanism(httpConfig.getValue().auth().realm().orElse(null), formAuthEnabled);
             }
         };
     }
-
 }

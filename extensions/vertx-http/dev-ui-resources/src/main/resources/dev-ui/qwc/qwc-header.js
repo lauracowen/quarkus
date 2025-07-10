@@ -1,4 +1,4 @@
-import { LitElement, html, css } from 'lit';
+import { QwcHotReloadElement, html, css} from 'qwc-hot-reload-element';
 import { RouterController } from 'router-controller';
 import { observeState } from 'lit-element-state';
 import { themeState } from 'theme-state';
@@ -9,14 +9,16 @@ import '@vaadin/tabs';
 import '@vaadin/confirm-dialog';
 import '@vaadin/popover';
 import '@vaadin/vertical-layout';
+import 'qui-assistant-warning';
 import { popoverRenderer } from '@vaadin/popover/lit.js';
 import 'qwc/qwc-extension-link.js';
 import './qwc-theme-switch.js';
+import { assistantState } from 'assistant-state';
 
 /**
  * This component represent the Dev UI Header
  */
-export class QwcHeader extends observeState(LitElement) {
+export class QwcHeader extends observeState(QwcHotReloadElement) {
     
     routerController = new RouterController(this);
     jsonRpc = new JsonRpc("report-issues", true);
@@ -102,6 +104,7 @@ export class QwcHeader extends observeState(LitElement) {
     static properties = {
         _title: {state: true},
         _subTitle: {state: true},
+        _showWarning: {state: true},
         _rightSideNav: {state: true},
         _dialogOpened: {state: true},
     };
@@ -111,6 +114,7 @@ export class QwcHeader extends observeState(LitElement) {
         this._dialogOpened = false;
         this._title = "Extensions";
         this._subTitle = null;
+        this._showWarning = false;
         this._rightSideNav = "";
         
         window.addEventListener('vaadin-router-location-changed', (event) => {
@@ -124,6 +128,11 @@ export class QwcHeader extends observeState(LitElement) {
 
     connectedCallback() {
         super.connectedCallback();
+        this._loadHeadlessComponents(devuiState.cards.active);
+    }
+
+    hotReload(){
+        this._loadHeadlessComponents(devuiState.cards.active);
     }
 
     render() {
@@ -137,6 +146,29 @@ export class QwcHeader extends observeState(LitElement) {
             </div>
             ${this._renderReconnectPopup()}
         </div>`;
+    }
+
+    async _loadHeadlessComponents(extensions){
+        
+        for (const extension of extensions) {
+            if (extension.headlessComponentRef) {
+                try {
+                    await import(extension.headlessComponentRef);
+
+                    let name = extension.headlessComponent.slice(0, -3); // remove the .js
+
+                    if (customElements.get(name)) {
+                        const element = document.createElement(name);
+                        element.setAttribute('namespace', extension.namespace);
+                        document.body.appendChild(element);
+                    } else {
+                        console.warn(`Headless custom must be the same as the file name (without the .js). Not defined for ${extension.headlessComponentRef}`);
+                    }
+                  } catch (err) {
+                    console.error(`Failed to load ${extension.headlessComponentRef}`, err);
+                  }
+            }
+        }
     }
 
     _renderReconnectPopup(){
@@ -180,9 +212,15 @@ export class QwcHeader extends observeState(LitElement) {
     _renderTitle(){
         let dot = "\u00B7";
         if(this._subTitle){
-            return html`<span class="title">${this._title}</span><span class="subtitle">${dot} ${this._subTitle}</span>`;
+            return html`<span class="title">${this._title}</span><span class="subtitle">${dot} ${this._subTitle} ${this._renderWarning()}</span>`;
         }else{
             return html`<span class="title">${this._title}</span>`;
+        }
+    }
+
+    _renderWarning(){
+        if(this._showWarning){
+            return html`<qui-assistant-warning></qui-assistant-warning>`;
         }
     }
 
@@ -223,9 +261,16 @@ export class QwcHeader extends observeState(LitElement) {
 
     _updateHeader(event){
         let currentPage = this.routerController.getCurrentPage();
+        
         this._selectedPageIsMax = !currentPage.includeInMenu; // TODO: introduce new property called isMaxView ?
         this._title = this.routerController.getCurrentTitle();
         this._subTitle = this.routerController.getCurrentSubTitle();
+        if(currentPage.assistantPage) {
+            this._showWarning = true;
+        }else{
+            this._showWarning = false;
+        }
+        
         var subMenu = this.routerController.getCurrentSubMenu();
         if(subMenu){
             this._rightSideNav = html`<vaadin-tabs selected="${subMenu.index}">
@@ -249,14 +294,16 @@ export class QwcHeader extends observeState(LitElement) {
     }
 
     _renderTab(index, link){
-        if(!link.page.embed && link.page.includeInMenu){
-            return html`
-                ${this._renderSubMenuLink(index, link)}
-                `;
-        }else{
-            return html`<vaadin-tab>
-                ${this._renderSubMenuLink(index, link)}
-            </vaadin-tab>`;
+        if(!link.page.assistantPage || assistantState.current.isConfigured){
+            if(!link.page.embed && link.page.includeInMenu){
+                return html`
+                    ${this._renderSubMenuLink(index, link)}
+                    `;
+            }else{
+                return html`<vaadin-tab>
+                    ${this._renderSubMenuLink(index, link)}
+                </vaadin-tab>`;
+            }
         }
     }
 
@@ -265,17 +312,21 @@ export class QwcHeader extends observeState(LitElement) {
         let relativePath = link.page.id.replace(link.page.namespace + "/", ""); 
 
         return html`<qwc-extension-link
+            streamingLabelParams="${link.page.streamingLabelParams}"
+            webcomponentTagName="${link.page.componentName}"
             namespace="${link.page.namespace}"
             extensionName="${link.page.extensionId}"
             iconName="${link.page.icon}"
+            tooltipContent="${link.page.tooltip}"
+            colorName="${link.page.color}"
             displayName="${link.page.title}"
-            staticLabel="${link.page.staticLabel}"
-            dynamicLabel="${link.page.dynamicLabel}"
-            streamingLabel="${link.page.streamingLabel}"
             path="${relativePath}"
             ?embed=${link.page.embed}
             externalUrl="${link.page.metadata.externalUrl}"
-            webcomponent="${link.page.componentLink}" >
+            webcomponent="${link.page.componentLink}"
+            staticLabel="${link.page.staticLabel}"
+            dynamicLabel="${link.page.dynamicLabel}"
+            streamingLabel="${link.page.streamingLabel}">
         </qwc-extension-link>`;
     }
 

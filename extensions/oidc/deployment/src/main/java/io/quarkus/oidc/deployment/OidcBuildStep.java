@@ -89,7 +89,6 @@ import io.quarkus.oidc.runtime.DefaultTokenIntrospectionUserInfoCache;
 import io.quarkus.oidc.runtime.DefaultTokenStateManager;
 import io.quarkus.oidc.runtime.Jose4jRecorder;
 import io.quarkus.oidc.runtime.OidcAuthenticationMechanism;
-import io.quarkus.oidc.runtime.OidcConfig;
 import io.quarkus.oidc.runtime.OidcConfigurationAndProviderProducer;
 import io.quarkus.oidc.runtime.OidcIdentityProvider;
 import io.quarkus.oidc.runtime.OidcJsonWebTokenProducer;
@@ -98,12 +97,13 @@ import io.quarkus.oidc.runtime.OidcSessionImpl;
 import io.quarkus.oidc.runtime.OidcTenantDefaultIdConfigBuilder;
 import io.quarkus.oidc.runtime.OidcTokenCredentialProducer;
 import io.quarkus.oidc.runtime.OidcUtils;
+import io.quarkus.oidc.runtime.ResourceMetadataHandler;
 import io.quarkus.oidc.runtime.TenantConfigBean;
+import io.quarkus.oidc.runtime.WebSocketIdentityUpdateProvider;
 import io.quarkus.oidc.runtime.health.OidcTenantHealthCheck;
 import io.quarkus.oidc.runtime.providers.AzureAccessTokenCustomizer;
 import io.quarkus.runtime.configuration.ConfigurationException;
 import io.quarkus.security.Authenticated;
-import io.quarkus.security.runtime.SecurityConfig;
 import io.quarkus.security.spi.AdditionalSecuredMethodsBuildItem;
 import io.quarkus.security.spi.ClassSecurityAnnotationBuildItem;
 import io.quarkus.security.spi.RegisterClassSecurityCheckBuildItem;
@@ -111,6 +111,7 @@ import io.quarkus.smallrye.health.deployment.spi.HealthBuildItem;
 import io.quarkus.tls.deployment.spi.TlsRegistryBuildItem;
 import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.quarkus.vertx.http.deployment.EagerSecurityInterceptorBindingBuildItem;
+import io.quarkus.vertx.http.deployment.FilterBuildItem;
 import io.quarkus.vertx.http.deployment.HttpAuthMechanismAnnotationBuildItem;
 import io.quarkus.vertx.http.deployment.HttpSecurityUtils;
 import io.quarkus.vertx.http.deployment.PreRouterFinalizationBuildItem;
@@ -120,6 +121,8 @@ import io.smallrye.jwt.auth.cdi.ClaimValueProducer;
 import io.smallrye.jwt.auth.cdi.CommonJwtProducer;
 import io.smallrye.jwt.auth.cdi.JsonValueProducer;
 import io.smallrye.jwt.auth.cdi.RawClaimTypeProducer;
+import io.vertx.core.Handler;
+import io.vertx.ext.web.RoutingContext;
 
 @BuildSteps(onlyIf = OidcBuildStep.IsEnabled.class)
 public class OidcBuildStep {
@@ -206,6 +209,7 @@ public class OidcBuildStep {
                 .addBeanClass(DefaultTokenStateManager.class)
                 .addBeanClass(OidcSessionImpl.class)
                 .addBeanClass(BackChannelLogoutHandler.class)
+                .addBeanClass(ResourceMetadataHandler.class)
                 .addBeanClass(AzureAccessTokenCustomizer.class);
         additionalBeans.produce(builder.build());
     }
@@ -218,12 +222,12 @@ public class OidcBuildStep {
 
     @BuildStep(onlyIf = IsCacheEnabled.class)
     @Record(ExecutionTime.RUNTIME_INIT)
-    public SyntheticBeanBuildItem addDefaultCacheBean(OidcConfig config,
+    public SyntheticBeanBuildItem addDefaultCacheBean(
             OidcRecorder recorder,
             CoreVertxBuildItem vertxBuildItem) {
         return SyntheticBeanBuildItem.configure(DefaultTokenIntrospectionUserInfoCache.class).unremovable()
                 .types(DefaultTokenIntrospectionUserInfoCache.class, TokenIntrospectionCache.class, UserInfoCache.class)
-                .supplier(recorder.setupTokenCache(config, vertxBuildItem.getVertx()))
+                .supplier(recorder.setupTokenCache(vertxBuildItem.getVertx()))
                 .scope(Singleton.class)
                 .setRuntimeInit()
                 .done();
@@ -347,12 +351,11 @@ public class OidcBuildStep {
 
     @Record(ExecutionTime.RUNTIME_INIT)
     @BuildStep
-    SyntheticBeanBuildItem setup(OidcConfig config, OidcRecorder recorder, SecurityConfig securityConfig,
-            CoreVertxBuildItem vertxBuildItem, TlsRegistryBuildItem tlsRegistryBuildItem) {
+    SyntheticBeanBuildItem setup(OidcRecorder recorder, CoreVertxBuildItem vertxBuildItem,
+            TlsRegistryBuildItem tlsRegistryBuildItem) {
         return SyntheticBeanBuildItem.configure(TenantConfigBean.class).unremovable().types(TenantConfigBean.class)
                 .addInjectionPoint(ParameterizedType.create(EVENT, ClassType.create(Oidc.class)))
-                .createWith(recorder.createTenantConfigBean(config, vertxBuildItem.getVertx(), tlsRegistryBuildItem.registry(),
-                        securityConfig))
+                .createWith(recorder.createTenantConfigBean(vertxBuildItem.getVertx(), tlsRegistryBuildItem.registry()))
                 .destroyer(TenantConfigBean.Destroyer.class)
                 .scope(Singleton.class) // this should have been @ApplicationScoped but fails for some reason
                 .setRuntimeInit()
@@ -480,6 +483,28 @@ public class OidcBuildStep {
         if (config.healthEnabled() && capabilities.isPresent(Capability.SMALLRYE_HEALTH)) {
             healthBuildItems.produce(new HealthBuildItem(OidcTenantHealthCheck.class.getName(), true));
         }
+    }
+
+    @Record(ExecutionTime.STATIC_INIT)
+    @BuildStep
+    FilterBuildItem registerBackChannelLogoutHandler(BeanContainerBuildItem beanContainerBuildItem, OidcRecorder recorder) {
+        Handler<RoutingContext> handler = recorder.getBackChannelLogoutHandler(beanContainerBuildItem.getValue());
+        return new FilterBuildItem(handler, FilterBuildItem.AUTHORIZATION - 50);
+    }
+
+    @BuildStep
+    void supportIdentityUpdateForWebSocketConnections(Capabilities capabilities,
+            BuildProducer<AdditionalBeanBuildItem> additionalBeanProducer) {
+        if (capabilities.isPresent(Capability.WEBSOCKETS_NEXT)) {
+            additionalBeanProducer.produce(AdditionalBeanBuildItem.unremovableOf(WebSocketIdentityUpdateProvider.class));
+        }
+    }
+
+    @Record(ExecutionTime.STATIC_INIT)
+    @BuildStep
+    FilterBuildItem registerResourceMetadataHandler(BeanContainerBuildItem beanContainerBuildItem, OidcRecorder recorder) {
+        Handler<RoutingContext> handler = recorder.getResourceMetadataHandler(beanContainerBuildItem.getValue());
+        return new FilterBuildItem(handler, FilterBuildItem.AUTHORIZATION - 50);
     }
 
     private static boolean areEagerSecInterceptorsSupported(Capabilities capabilities,

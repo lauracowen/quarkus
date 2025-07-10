@@ -28,6 +28,7 @@ import io.netty.handler.codec.http.HttpResponseStatus;
 import io.quarkus.oidc.AuthorizationCodeTokens;
 import io.quarkus.oidc.IdTokenCredential;
 import io.quarkus.oidc.JavaScriptRequestChecker;
+import io.quarkus.oidc.LogoutUtils;
 import io.quarkus.oidc.OidcRedirectFilter;
 import io.quarkus.oidc.OidcRedirectFilter.OidcRedirectContext;
 import io.quarkus.oidc.OidcTenantConfig;
@@ -39,6 +40,7 @@ import io.quarkus.oidc.common.runtime.OidcCommonUtils;
 import io.quarkus.oidc.common.runtime.OidcConstants;
 import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication;
 import io.quarkus.oidc.runtime.OidcTenantConfig.Authentication.ResponseMode;
+import io.quarkus.oidc.runtime.OidcTenantConfig.Logout.LogoutMode;
 import io.quarkus.security.AuthenticationCompletionException;
 import io.quarkus.security.AuthenticationFailedException;
 import io.quarkus.security.AuthenticationRedirectException;
@@ -992,8 +994,8 @@ public class CodeAuthenticationMechanism extends AbstractOidcAuthenticationMecha
             try {
                 json = OidcUtils.decryptJson(parsedStateCookieValue[1], configContext.getStateCookieEncryptionKey());
             } catch (Exception ex) {
-                LOG.errorf("State cookie value can not be decrypted for the %s tenant",
-                        configContext.oidcConfig().tenantId().get());
+                LOG.errorf("State cookie value for the %s tenant can not be decrypted: %s",
+                        configContext.oidcConfig().tenantId().get(), ex.getMessage());
                 throw new AuthenticationCompletionException(ex);
             }
             bean.setRestorePath(json.getString(OidcUtils.STATE_COOKIE_RESTORE_PATH));
@@ -1234,7 +1236,8 @@ public class CodeAuthenticationMechanism extends AbstractOidcAuthenticationMecha
             try {
                 return OidcUtils.encryptJson(json, configContext.getStateCookieEncryptionKey());
             } catch (Exception ex) {
-                LOG.errorf("State containing the code verifier can not be encrypted: %s", ex.getMessage());
+                LOG.errorf("State cookie value for the %s tenant can not be encrypted: %s",
+                        configContext.oidcConfig().tenantId().get(), ex.getMessage());
                 throw new AuthenticationCompletionException(ex);
             }
         } else {
@@ -1434,8 +1437,10 @@ public class CodeAuthenticationMechanism extends AbstractOidcAuthenticationMecha
 
     private String buildLogoutRedirectUri(TenantConfigContext configContext, String idToken, RoutingContext context) {
         String logoutPath = configContext.provider().getMetadata().getEndSessionUri();
+        Map<String, String> extraParams = configContext.oidcConfig().logout().extraParams();
         StringBuilder logoutUri = new StringBuilder(logoutPath);
-        if (idToken != null || configContext.oidcConfig().logout().postLogoutPath().isPresent()) {
+        if (idToken != null || configContext.oidcConfig().logout().postLogoutPath().isPresent()
+                || (extraParams != null && !extraParams.isEmpty())) {
             logoutUri.append("?");
         }
         if (idToken != null) {
@@ -1476,10 +1481,29 @@ public class CodeAuthenticationMechanism extends AbstractOidcAuthenticationMecha
                 .map(new Function<Void, Void>() {
                     @Override
                     public Void apply(Void t) {
-                        String logoutUri = buildLogoutRedirectUri(configContext, idToken, context);
-                        LOG.debugf("Logout uri: %s", logoutUri);
-                        throw new AuthenticationRedirectException(
-                                filterRedirect(context, configContext, logoutUri, Redirect.Location.OIDC_LOGOUT));
+                        if (configContext.oidcConfig().logout().logoutMode() == LogoutMode.QUERY) {
+                            String logoutUri = buildLogoutRedirectUri(configContext, idToken, context);
+                            LOG.debugf("Logout uri: %s", logoutUri);
+                            throw new AuthenticationRedirectException(
+                                    filterRedirect(context, configContext, logoutUri, Redirect.Location.OIDC_LOGOUT));
+                        } else {
+                            String postLogoutUrl = null;
+                            String postLogoutState = null;
+                            if (configContext.oidcConfig().logout().postLogoutPath().isPresent()) {
+                                postLogoutUrl = buildUri(context, isForceHttps(configContext.oidcConfig()),
+                                        configContext.oidcConfig().logout().postLogoutPath().get());
+                                postLogoutState = generatePostLogoutState(context, configContext);
+                            }
+
+                            String logoutUrl = filterRedirect(context, configContext,
+                                    configContext.provider().getMetadata().getEndSessionUri(), Redirect.Location.OIDC_LOGOUT);
+                            // Target URL is embedded in the form post payload
+                            String formPostLogout = LogoutUtils.createFormPostLogout(configContext.oidcConfig().logout(),
+                                    logoutUrl, idToken,
+                                    postLogoutUrl, postLogoutState);
+                            LOG.debugf("Initiating form post logout");
+                            throw new AuthenticationRedirectException(200, formPostLogout);
+                        }
                     }
                 });
     }

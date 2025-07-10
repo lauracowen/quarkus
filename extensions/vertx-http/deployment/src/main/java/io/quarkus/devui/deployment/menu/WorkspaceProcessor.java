@@ -3,6 +3,7 @@ package io.quarkus.devui.deployment.menu;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URI;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,12 +21,17 @@ import java.util.concurrent.CompletionStage;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-import io.quarkus.deployment.IsDevelopment;
+import io.quarkus.assistant.runtime.dev.Assistant;
+import io.quarkus.deployment.Capabilities;
+import io.quarkus.deployment.Capability;
+import io.quarkus.deployment.IsLocalDevelopment;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
 import io.quarkus.deployment.builditem.LaunchModeBuildItem;
 import io.quarkus.deployment.pkg.builditem.BuildSystemTargetBuildItem;
+import io.quarkus.deployment.pkg.builditem.CurateOutcomeBuildItem;
+import io.quarkus.dev.console.DevConsoleManager;
 import io.quarkus.devui.deployment.DevUIConfig;
 import io.quarkus.devui.deployment.InternalPageBuildItem;
 import io.quarkus.devui.spi.buildtime.BuildTimeActionBuildItem;
@@ -41,7 +47,7 @@ import io.quarkus.devui.spi.workspace.WorkspaceBuildItem;
 /**
  * This creates the workspace Page
  */
-@BuildSteps(onlyIf = IsDevelopment.class)
+@BuildSteps(onlyIf = IsLocalDevelopment.class)
 public class WorkspaceProcessor {
 
     @BuildStep
@@ -56,7 +62,6 @@ public class WorkspaceProcessor {
 
         Path outputDir = buildSystemTarget.getOutputDirectory();
         Path projectRoot = outputDir.getParent();
-
         if (projectRoot != null && Files.exists(projectRoot)) {
 
             List<WorkspaceBuildItem.WorkspaceItem> workspaceItems = new ArrayList<>();
@@ -70,7 +75,8 @@ public class WorkspaceProcessor {
                 Files.walkFileTree(projectRoot, new SimpleFileVisitor<Path>() {
                     @Override
                     public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
-                        if (Files.isHidden(dir) || ignoreFolders.contains(dir.getFileName().toString())) {
+                        if (Files.isHidden(dir) || ignoreFolders.contains(dir.getFileName().toString())
+                                || !Files.isReadable(dir) || !Files.isExecutable(dir)) {
                             return FileVisitResult.SKIP_SUBTREE;
                         }
                         return FileVisitResult.CONTINUE;
@@ -80,7 +86,7 @@ public class WorkspaceProcessor {
                     public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
                         String fileName = file.getFileName().toString();
                         boolean shouldIgnore = Files.isHidden(file)
-                                || file.startsWith(outputDir)
+                                || file.startsWith(outputDir) || !Files.isReadable(file)
                                 || ignoreFilePatterns.stream().anyMatch(p -> p.matcher(fileName).matches());
 
                         if (!shouldIgnore) {
@@ -88,6 +94,18 @@ public class WorkspaceProcessor {
                             workspaceItems.add(new WorkspaceBuildItem.WorkspaceItem(name, file));
                         }
                         return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
+                        if (exc instanceof AccessDeniedException) {
+                            if (Files.isDirectory(file)) {
+                                return FileVisitResult.SKIP_SUBTREE;
+                            } else {
+                                return FileVisitResult.CONTINUE;
+                            }
+                        }
+                        return super.visitFileFailed(file, exc);
                     }
                 });
 
@@ -123,15 +141,19 @@ public class WorkspaceProcessor {
                 .display(Display.split)
                 .displayType(DisplayType.markdown)
                 .namespace(NAMESPACE)
-                .filter(Patterns.README_MD);
+                .filter(Patterns.ANY_MD);
 
-        workspaceActionProducer.produce(new WorkspaceActionBuildItem(actionBuilder));
+        workspaceActionProducer.produce(new WorkspaceActionBuildItem(NAMESPACE, actionBuilder));
     }
 
     @BuildStep
     void createBuildTimeActions(Optional<WorkspaceBuildItem> workspaceBuildItem,
             List<WorkspaceActionBuildItem> workspaceActionBuildItems,
-            BuildProducer<BuildTimeActionBuildItem> buildTimeActionProducer) {
+            BuildProducer<BuildTimeActionBuildItem> buildTimeActionProducer,
+            Capabilities capabilities,
+            CurateOutcomeBuildItem curateOutcomeBuildItem) {
+
+        final boolean assistantIsAvailable = capabilities.isPresent(Capability.ASSISTANT);
 
         if (workspaceBuildItem.isPresent()) {
 
@@ -140,8 +162,10 @@ public class WorkspaceProcessor {
 
             // Workspace Actions
             Map<String, Action> actionMap = workspaceActionBuildItems.stream()
-                    .flatMap(item -> item.getActions().stream())
-                    .map(ActionBuilder::build)
+                    .flatMap(item -> item.getActions().stream()
+                            .map(builder -> builder
+                                    .namespace(item.getExtensionPathName(curateOutcomeBuildItem))
+                                    .build()))
                     .collect(Collectors.toMap(Action::getId, action -> action, (a, b) -> a));
 
             buildItemActions.addAction("getWorkspaceItems", (t) -> {
@@ -150,8 +174,9 @@ public class WorkspaceProcessor {
 
             buildItemActions.addAction("getWorkspaceActions", (t) -> {
                 return actionMap.values().stream()
+                        .filter(action -> assistantIsAvailable || !action.isAssistant())
                         .map(action -> new WorkspaceAction(action.getId(), action.getLabel(), action.getFilter(),
-                                action.getDisplay(), action.getDisplayType()))
+                                action.getDisplay(), action.getDisplayType(), action.isAssistant()))
                         .sorted(Comparator.comparing(WorkspaceAction::label))
                         .collect(Collectors.toList());
             });
@@ -162,11 +187,20 @@ public class WorkspaceProcessor {
                     Path path = Path.of(URI.create(t.get("path")));
                     Action actionToExecute = actionMap.get(actionId);
                     Path convertedPath = (Path) actionToExecute.getPathConverter().apply(path);
-                    Object result = actionToExecute.getFunction().apply(t);
-                    if (result instanceof CompletionStage<?> stage) {
-                        return stage.thenApply(res -> new WorkspaceActionResult(convertedPath, res));
+
+                    Object result;
+                    if (actionToExecute.isAssistant()) {
+                        Assistant assistant = DevConsoleManager.getGlobal(DevConsoleManager.DEV_MANAGER_GLOBALS_ASSISTANT);
+                        result = actionToExecute.getAssistantFunction().apply(assistant, t);
                     } else {
-                        return new WorkspaceActionResult(convertedPath, result);
+                        result = actionToExecute.getFunction().apply(t);
+                    }
+
+                    if (result != null && result instanceof CompletionStage<?> stage) {
+                        return stage
+                                .thenApply(res -> new WorkspaceActionResult(convertedPath, res, actionToExecute.isAssistant()));
+                    } else {
+                        return new WorkspaceActionResult(convertedPath, result, actionToExecute.isAssistant());
                     }
                 }
                 return null;
@@ -290,10 +324,10 @@ public class WorkspaceProcessor {
     }
 
     static record WorkspaceAction(String id, String label, Optional<Pattern> pattern, Display display,
-            DisplayType displayType) {
+            DisplayType displayType, boolean isAssistanceAction) {
     }
 
-    static record WorkspaceActionResult(Path path, Object result) {
+    static record WorkspaceActionResult(Path path, Object result, boolean isAssistant) {
     }
 
     private static final String NAMESPACE = "devui-workspace";

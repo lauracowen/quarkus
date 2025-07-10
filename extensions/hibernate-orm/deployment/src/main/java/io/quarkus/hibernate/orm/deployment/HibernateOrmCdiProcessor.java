@@ -1,5 +1,6 @@
 package io.quarkus.hibernate.orm.deployment;
 
+import static io.quarkus.hibernate.orm.deployment.util.HibernateProcessorUtil.hasEntities;
 import static org.apache.commons.lang3.BooleanUtils.isFalse;
 
 import java.lang.reflect.Modifier;
@@ -13,9 +14,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Any;
 import jakarta.enterprise.inject.Default;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Singleton;
 import jakarta.persistence.AttributeConverter;
 import jakarta.transaction.TransactionManager;
@@ -36,11 +35,9 @@ import org.jboss.jandex.CompositeIndex;
 import org.jboss.jandex.DotName;
 import org.jboss.jandex.FieldInfo;
 import org.jboss.jandex.MethodInfo;
-import org.jboss.jandex.ParameterizedType;
 import org.jboss.jandex.Type;
 import org.objectweb.asm.ClassVisitor;
 
-import io.agroal.api.AgroalDataSource;
 import io.quarkus.agroal.spi.JdbcDataSourceBuildItem;
 import io.quarkus.arc.deployment.AdditionalBeanBuildItem;
 import io.quarkus.arc.deployment.AnnotationsTransformerBuildItem;
@@ -61,15 +58,14 @@ import io.quarkus.deployment.Capability;
 import io.quarkus.deployment.annotations.BuildProducer;
 import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.BuildSteps;
+import io.quarkus.deployment.annotations.Consume;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.BytecodeTransformerBuildItem;
-import io.quarkus.deployment.builditem.CombinedIndexBuildItem;
 import io.quarkus.gizmo.ClassTransformer;
 import io.quarkus.gizmo.MethodDescriptor;
 import io.quarkus.hibernate.orm.PersistenceUnit;
 import io.quarkus.hibernate.orm.runtime.HibernateOrmRecorder;
-import io.quarkus.hibernate.orm.runtime.HibernateOrmRuntimeConfig;
 import io.quarkus.hibernate.orm.runtime.JPAConfig;
 import io.quarkus.hibernate.orm.runtime.PersistenceUnitUtil;
 import io.quarkus.hibernate.orm.runtime.RequestScopedSessionHolder;
@@ -87,7 +83,8 @@ public class HibernateOrmCdiProcessor {
     private static final List<DotName> CRITERIA_BUILDER_EXPOSED_TYPES = List.of(ClassNames.CRITERIA_BUILDER,
             ClassNames.HIBERNATE_CRITERIA_BUILDER);
     private static final List<DotName> METAMODEL_EXPOSED_TYPES = List.of(ClassNames.METAMODEL);
-    private static final List<DotName> SCHEMA_MANAGER_EXPOSED_TYPES = List.of(ClassNames.SCHEMA_MANAGER);
+    private static final List<DotName> SCHEMA_MANAGER_EXPOSED_TYPES = List.of(ClassNames.SCHEMA_MANAGER,
+            ClassNames.HIBERNATE_SCHEMA_MANAGER);
     private static final List<DotName> CACHE_EXPOSED_TYPES = List.of(ClassNames.CACHE, ClassNames.HIBERNATE_CACHE);
     private static final List<DotName> PERSISTENCE_UNIT_UTIL_EXPOSED_TYPES = List.of(ClassNames.PERSISTENCE_UNIT_UTIL);
 
@@ -158,7 +155,6 @@ public class HibernateOrmCdiProcessor {
     @Record(ExecutionTime.RUNTIME_INIT)
     void generateJpaConfigBean(HibernateOrmRecorder recorder,
             Capabilities capabilities,
-            HibernateOrmRuntimeConfig hibernateOrmRuntimeConfig,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeanBuildItemBuildProducer) {
         ExtendedBeanConfigurator configurator = SyntheticBeanBuildItem
                 .configure(JPAConfig.class)
@@ -166,24 +162,7 @@ public class HibernateOrmCdiProcessor {
                 .scope(Singleton.class)
                 .unremovable()
                 .setRuntimeInit()
-                .supplier(recorder.jpaConfigSupplier(hibernateOrmRuntimeConfig))
-                .destroyer(JPAConfig.Destroyer.class);
-
-        // Add a synthetic dependency from JPAConfig to any datasource/pool,
-        // so that JPAConfig is destroyed before the datasource/pool.
-        // The alternative would be adding an application destruction observer
-        // (@Observes @BeforeDestroyed(ApplicationScoped.class)) to JPAConfig,
-        // but that would force initialization of JPAConfig upon application shutdown,
-        // which may cause cascading failures if the shutdown happened before JPAConfig was initialized.
-        if (capabilities.isPresent(Capability.HIBERNATE_REACTIVE)) {
-            configurator.addInjectionPoint(ParameterizedType.create(DotName.createSimple(Instance.class),
-                    new Type[] { ClassType.create(DotName.createSimple("io.vertx.sqlclient.Pool")) }, null),
-                    AnnotationInstance.builder(Any.class).build());
-        } else {
-            configurator.addInjectionPoint(ParameterizedType.create(DotName.createSimple(Instance.class),
-                    new Type[] { ClassType.create(DotName.createSimple(AgroalDataSource.class)) }, null),
-                    AnnotationInstance.builder(Any.class).build());
-        }
+                .supplier(recorder.jpaConfigSupplier());
 
         syntheticBeanBuildItemBuildProducer.produce(configurator.done());
     }
@@ -191,13 +170,10 @@ public class HibernateOrmCdiProcessor {
     // These beans must be initialized at runtime because their initialization
     // depends on runtime configuration (to activate/deactivate a persistence unit)
     @Record(ExecutionTime.RUNTIME_INIT)
+    @Consume(JdbcDataSourceBuildItem.class) // just make sure the datasources are initialized
     @BuildStep
-    void generateDataSourceBeans(HibernateOrmRecorder recorder,
+    void generateHibernateBeans(HibernateOrmRecorder recorder,
             List<PersistenceUnitDescriptorBuildItem> persistenceUnitDescriptors,
-            ImpliedBlockingPersistenceUnitTypeBuildItem impliedBlockingPersistenceUnitType,
-            List<JdbcDataSourceBuildItem> jdbcDataSources, // just make sure the datasources are initialized
-            Capabilities capabilities,
-            BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             BuildProducer<SyntheticBeanBuildItem> syntheticBeanBuildItemBuildProducer) {
         if (persistenceUnitDescriptors.isEmpty()) {
             // No persistence units have been configured so bail out
@@ -257,14 +233,11 @@ public class HibernateOrmCdiProcessor {
     }
 
     @BuildStep
-    void registerBeans(HibernateOrmConfig hibernateOrmConfig,
-            BuildProducer<AdditionalBeanBuildItem> additionalBeans,
+    void registerBeans(BuildProducer<AdditionalBeanBuildItem> additionalBeans,
             BuildProducer<UnremovableBeanBuildItem> unremovableBeans,
             Capabilities capabilities,
-            CombinedIndexBuildItem combinedIndex,
-            List<PersistenceUnitDescriptorBuildItem> descriptors,
             JpaModelBuildItem jpaModel) {
-        if (!HibernateOrmProcessor.hasEntities(jpaModel)) {
+        if (!hasEntities(jpaModel)) {
             return;
         }
 
@@ -293,7 +266,7 @@ public class HibernateOrmCdiProcessor {
     void transformBeans(JpaModelBuildItem jpaModel, JpaModelIndexBuildItem indexBuildItem,
             BeanDiscoveryFinishedBuildItem beans,
             BuildProducer<BytecodeTransformerBuildItem> producer) {
-        if (!HibernateOrmProcessor.hasEntities(jpaModel)) {
+        if (!hasEntities(jpaModel)) {
             return;
         }
 
